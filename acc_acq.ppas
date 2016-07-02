@@ -1,0 +1,99 @@
+// Acc_Acq three axis accelerometer acquisition program
+// PIC16F688 convert (10 bit) and transmit data on serial port
+// baud rate = 38400
+// sample frequency: 5,10,50,100 Hz (DIP selectable)
+// I/O CONFIGURATION:
+// RA1 Vref	input (+2.8V)
+// RA0 (An0) analog	input X axis
+// RA2 (An2) analog	input Y axis
+// RC0 (An4) analog	input Z axis
+// RC2 input Dip1 - period multiplier
+// RC3 input Dip2 - period multiplier
+// RC4 output Serial Tx
+// MCU Xtal: 18.432 MHz
+// G. Carrera 03/10/07
+
+program acc_acq;
+const
+  CR: char = 13;
+  LF: char = 10;
+var int0flg: boolean;
+    texd: string[5];
+    scandata: array[0..2] of word;
+    BPm,i,t: byte;
+
+procedure interrupt;
+// timer#0 for interrupt every 10 msec (100Hz)
+begin
+  if TestBit(INTCON, T0IF) then  // timer#0 interrupt
+    begin
+      ClearBit(INTCON, T0IF); // reset Timer#0 interrupt flag
+      TMR0:= 76;
+      SetBit(INTCON, T0IE); // Enables Timer#0 interrupt
+      int0flg:= true;
+    end;
+end;
+
+procedure IOinit;
+// initialize I/O
+begin
+  PORTA:= 0;
+  ADCON0:= $C0; {VCFG,ADFM=1, set An0}
+  CMCON0:= 0; {comparators off, RA0,RA1,RC0,RC1= analog in}
+  ANSEL:= $17;{RA0,RA2,RC0= analog in 0,2,6; RA1=Vref}
+  TRISA:= $2F; {PORTA bit 4 is output}
+  TRISC:= $2F; {PORTC bit 4 is output}
+  i:= PORTC;{read DIP}
+  i:= (i And $0C) Shr 2; {mask and shift}
+  case i of  {set multiplier of Base Period (10ms)}
+    0: BPm:=20; {saple frequency= 5 Hz (200ms)}
+    1: BPm:=10; {saple frequency= 10 Hz (100ms)}
+    2: BPm:=2; {saple frequency= 50 Hz (20ms)}
+    3: BPm:=1; {saple frequency= 100 Hz (10ms)}
+  end;
+  Usart_Init(38400);
+  OPTION_REG:= $07; // set prescaler of Timer#0 to 256
+  TMR0:= 76; // T0 overflow every 180 counts
+  SetBit(INTCON, T0IE); // Enables Timer#0 interrupt
+  ClearBit(INTCON, T0IF); // reset Timer#0 interrupt flag
+  SetBit(INTCON, GIE); // Enables global interrupt
+  int0flg:= false;
+  t:=0;
+end;
+
+begin
+  IOinit;
+  Delay_ms(100);
+  Usart_Write(CR);
+  Usart_Write(LF);
+  Usart_Write_Text('Three Channels Acquisition System - G.Carrera 031007 '+CR+LF);
+  scandata[0]:= BPm*10;
+  WordToStr(scandata[0],texd);
+  Usart_Write_Text('Sample Period [ms] = ');
+  Usart_Write_Text(texd);
+  Usart_Write(CR);
+  Usart_Write(LF);
+  Delay_ms(1000);
+   while true Do //  endless loop
+    begin
+      if int0flg then
+        begin
+          int0flg:= false;
+          t:= t+1;
+        end;
+      if (t=BPm) then
+        begin // scan every BPm periods
+          t:=0;
+          scandata[0]:= Adc_Read(0);{convert acc X}
+          scandata[1]:= Adc_Read(2);{convert acc Y}
+          scandata[2]:= Adc_Read(4);{convert acc Z}
+          for i:=0 to 2 Do {transmit data}
+            begin
+              WordToStr(scandata[i],texd);
+              Usart_Write_Text(texd);
+            end;
+          Usart_Write(CR);
+          Usart_Write(LF);
+        end;
+    end;
+end.
